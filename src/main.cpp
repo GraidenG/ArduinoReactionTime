@@ -13,7 +13,7 @@
 int BUTTONS[5] = {18, 19, 20, 2, 3};
 volatile bool BUTTON_STATES[5] = {false, false, false, false, false};
 
-volatile long BUTTON_PRESS_TIMES[5];
+volatile unsigned long BUTTON_PRESS_TIMES[5] = {0, 0, 0, 0 ,0};
 
 int LEDS[3] = {49, 51, 53};
 
@@ -55,7 +55,7 @@ int currentRoundPresses = 0;
 const String fileName = "test.txt";
 
 
-int TIMEOUT = 1500;
+int TIMEOUT = 1000;
 
 // VSS = GND
 // VDD = 5V
@@ -166,11 +166,11 @@ void setup() {
   pinMode(LEDS[1], OUTPUT);
   pinMode(LEDS[2], OUTPUT);
 
-  attachInterrupt(digitalPinToInterrupt(BUTTONS[0]), []{buttonHandler(BUTTONS[0]);}, FALLING);
-  attachInterrupt(digitalPinToInterrupt(BUTTONS[1]), []{buttonHandler(BUTTONS[1]);}, FALLING);
-  attachInterrupt(digitalPinToInterrupt(BUTTONS[2]), []{buttonHandler(BUTTONS[2]);}, FALLING);
-  attachInterrupt(digitalPinToInterrupt(VOID_BUTTON), []{buttonHandler(BUTTONS[3]);}, FALLING);
-  attachInterrupt(digitalPinToInterrupt(START_BUTTON), []{buttonHandler(BUTTONS[4]);}, FALLING);
+  attachInterrupt(digitalPinToInterrupt(BUTTONS[0]), []{buttonHandler(0);}, FALLING);
+  attachInterrupt(digitalPinToInterrupt(BUTTONS[1]), []{buttonHandler(1);}, FALLING);
+  attachInterrupt(digitalPinToInterrupt(BUTTONS[2]), []{buttonHandler(2);}, FALLING);
+  attachInterrupt(digitalPinToInterrupt(VOID_BUTTON), []{buttonHandler(3);}, FALLING);
+  attachInterrupt(digitalPinToInterrupt(START_BUTTON), []{buttonHandler(4);}, FALLING);
 
   lcd.begin(16, 2);
   LCDShowStartScreen();
@@ -197,10 +197,10 @@ void setup() {
   //todo: get last user ID from SC card
 }
 
-void buttonHandler(int button) {
-  if (millis() - getButtonLastPressed(button) < 20) return; // for debounce protection
-  setButtonLastPressed(button);
-  setButtonState(button, true);
+void buttonHandler(int index) {
+  if (millis() - BUTTON_PRESS_TIMES[index] < 20) return; // for debounce protection
+  BUTTON_PRESS_TIMES[index] = millis();
+  BUTTON_STATES[index] = true;
 }
 
 void buttonPressChecks() {
@@ -243,7 +243,7 @@ void buttonPressChecks() {
           break;
         } else {
           Serial.println("wrap from left");
-          MenuItem newMenuItem = menuItems[size - 1];
+          MenuItem &newMenuItem = menuItems[size - 1];
 
           Serial.print(" new selected name: ");
           Serial.println(newMenuItem.name);
@@ -332,10 +332,10 @@ void buttonHeldActions() {
 
   // acting as a confirmation button, not necessarily start
   if (startButtonHeld && onMenu) {
-    if (getButtonLastPressed(START_BUTTON) + 20 < millis() && digitalRead(START_BUTTON) != LOW ) {
+    if (getButtonLastPressed(START_BUTTON) + 20 <= millis() && digitalRead(START_BUTTON) != LOW ) {
       // no longer held (with 20 ms cooldown to protect from debounce)
       startButtonHeld = false;
-    } else if (millis() > getButtonLastPressed(START_BUTTON) + 100 && digitalRead(START_BUTTON) == LOW) {
+    } else if (millis() > getButtonLastPressed(START_BUTTON) + 20 && digitalRead(START_BUTTON) == LOW) {
       startButtonHeld = false; // reset
       Serial.println("START BUTTON HELD");
 
@@ -398,7 +398,7 @@ void loop() {
   countdownHandling();
   cancelHandling();
 
-  if ((long)millis() - LED_TIMESTAMP > 0 && !continueRound && ACTIVE_LED != 0 && COUNTDOWN_START == -1 && !onMenu) {
+  if (LED_TIMESTAMP > 0 && (long)millis() - LED_TIMESTAMP > 0 && !continueRound && ACTIVE_LED != 0 && COUNTDOWN_START == -1 && !onMenu) {
     digitalWrite(ACTIVE_LED, HIGH);
   }
 
@@ -418,11 +418,11 @@ void loop() {
       Serial.println("choice mode end");
       // CHOICE_MODE Is set to false when the user confirms okay to move on
       LCDShowSummary();
-    } else if (roundNumber > MAX_ROUND) {
+    } else if (roundNumber >= MAX_ROUND) {
       Serial.println("end of test");
       LCDShowSummary();
     }
-  } else if (millis() > LED_TIMESTAMP + TIMEOUT && COUNTDOWN_START == -1 && RUNNING && !onMenu) {
+  } else if (LED_TIMESTAMP > 0 && millis() > LED_TIMESTAMP + TIMEOUT && COUNTDOWN_START == -1 && RUNNING && !onMenu) {
     digitalWrite(ACTIVE_LED, LOW);
     Serial.print("TIMEOUT");
     setLEDTimestamp();
@@ -479,6 +479,9 @@ void LCDWriteCurrentTime(long time) {
 
 void LCDShowSummary() {
   onMenu = true;
+  ACTIVE_LED = 0;
+  LED_TIMESTAMP = -1;
+
   lcd.clear();
 
   lcd.print("BEST");
@@ -489,9 +492,12 @@ void LCDShowSummary() {
   lcd.setCursor(12,0);
   lcd.print(userID);
 
+  Serial.println("SUMMARY");
+  Serial.println("Times: ");
   long sum = 0;
   long bestTime = 0;
   for (int i = 0; i < MAX_ROUND; i++) {
+    Serial.println(currentRoundTimes[i]);
     sum += currentRoundTimes[i];
     if (currentRoundTimes[i] < bestTime || bestTime == 0) {
       bestTime = currentRoundTimes[i];
@@ -582,6 +588,7 @@ void start() {
   roundNumber = 0;
   continueRound = false;
 
+  delete[] currentRoundTimes;
   currentRoundTimes = new long[MAX_ROUND];
   currentRoundPresses = 0;
 
@@ -678,6 +685,7 @@ void countdownHandling() {
 
 void detectButton(int button_index) {
   if (ACTIVE_LED == 0 || LED_TIMESTAMP == -1) return; // bad input/debounce filtering
+  if (roundNumber >= MAX_ROUND) return; // don't record after max rounds
 
   long currentTime = millis();
   long timeDelta = currentTime - LED_TIMESTAMP;
@@ -692,14 +700,14 @@ void detectButton(int button_index) {
     Serial.print("Correct! Time: ");
     Serial.println(timeDelta);
 
-    currentRoundTimes[roundNumber - 1] = timeDelta;
+    currentRoundTimes[roundNumber] = timeDelta;
     currentRoundPresses++;
 
     LCDWriteCurrentTime(timeDelta);
 
     roundNumber++; // used by LCDWriteTime so needs to be updated after
     // record data
-  } else if (ACTIVE_LED != LEDS[button_index] && CHOICE_MODE) {
+  } else if (ACTIVE_LED != LEDS[button_index] && CHOICE_MODE && timeDelta > 100) {
     Serial.println("INCORRECT! Time: " );
     Serial.println(timeDelta);
     currentRoundPresses++;
@@ -746,7 +754,7 @@ long getButtonLastPressed(int button) {
 }
 
 void setRandomLED() {
-  ACTIVE_LED = LEDS[(int)random(0,4)];
+  ACTIVE_LED = LEDS[(int)random(0,3)];
   Serial.print("Random LED: ");
   Serial.println(ACTIVE_LED);
 }
