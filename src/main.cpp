@@ -49,17 +49,17 @@ bool CHOICE_MODE = true;
 
 int MAX_ROUND = 3;
 
-long *currentRoundTimes; // [round
+long *currentRoundTimes; // round
+long averageRoundTime = 0;
 int currentRoundPresses = 0;
 
-const String fileName = "test.txt";
-
+const char* fileName = "data.csv";
 
 int TIMEOUT = 1000;
 
 // VSS = GND
 // VDD = 5V
-// V0 = contrast (goes to GND)
+// V0 = contrast (goes to GND through resistor)
 // RW = read/write mode, write = 0 so no wire needed
 // D0-D3 unused
 // D4 - D7 data
@@ -93,6 +93,7 @@ void LCDWriteCurrentTime(long time);
 void LCDStartCountdown();
 void LCDStartTest();
 void LCDShowSummary();
+void LCDShowError(const String& error);
 
 class MenuItem {
   public:
@@ -125,7 +126,7 @@ MenuItem menuItems[] = {
 
 bool onMenu = true;
 
-bool writeToFile(const char* path, unsigned int data) {
+bool writeToFile(const char* path, String data) {
   File file = SD.open(path, FILE_WRITE);
 
   if (!file) {
@@ -137,13 +138,13 @@ bool writeToFile(const char* path, unsigned int data) {
     }
   }
 
-  file.print(static_cast<String>(data));
-  file.print(",\n"); // new line after data
+  file.println(data);
 
   file.close();
 
   return true;
 }
+
 
 void setup() {
   Serial.begin(9600);
@@ -178,23 +179,52 @@ void setup() {
 
   pinMode(CS, OUTPUT);
 
-  // File file;
-  // if (!SD.begin(CS)) {
-  //   Serial.print("Error init SD card!");
-  //   wdt_enable(WDTO_8S); // restart in 8s
-  //   while(true); // wait for arduino restart
-  // }
-  //
-  // file = SD.open(fileName, FILE_WRITE);
-  //
-  // if (!file) {
-  //   Serial.print("Error while creating/opening file");
-  //   wdt_enable(WDTO_8S); // restart in 8s
-  //   while(true); // wait for arduino restart
-  // }
+   File file;
+   if (!SD.begin(CS)) {
+     Serial.print("Error init SD card!");
+     wdt_enable(WDTO_8S); // restart in 8s
+     while(true); // wait for arduino restart
+   }
 
-  //file.close();
-  //todo: get last user ID from SC card
+   file = SD.open(fileName, FILE_WRITE);
+
+   if (!file) {
+     Serial.print("Error while creating/opening file");
+     wdt_enable(WDTO_8S); // restart in 8s
+     while(true); // wait for arduino restart
+   }
+
+  file.close();
+
+  file = SD.open(fileName, FILE_READ);
+
+  String line;
+  while (file.available()) {
+    line = file.readStringUntil('\n');
+
+    char charArray[line.length() + 1];
+    line.toCharArray(charArray, line.length() + 1);
+
+    char* element = strtok(charArray, ",");
+
+    int i = 0;
+    while (element != NULL) {
+      Serial.print(element);
+      Serial.print(" ");
+
+      // user ID stored in first column
+      if (i == 0) {
+        userID = atoi(element) + 1;
+        break;
+      }
+
+      element = strtok(NULL, ",");
+      i++;
+    }
+  }
+
+  file.close();
+
 }
 
 void buttonHandler(int index) {
@@ -342,13 +372,33 @@ void buttonHeldActions() {
       if (RUNNING) {
         // if we're on the menu and it is running, then it is the summary page
         // specifically in Choice Mode we want to start the new countdown to non-choice mode
-        if (CHOICE_MODE) {
-          CHOICE_MODE = false;
-          start();
-        } else {
-          // if we're in non-choice mode then finished
-          end();
+
+        String csvFormattedData;
+
+        csvFormattedData += String(userID) + ",";
+        csvFormattedData += String(averageRoundTime) + ",";
+
+        for (int i = 0; i < MAX_ROUND; i++) {
+          if (i < MAX_ROUND - 1) {
+            csvFormattedData += String(currentRoundTimes[i]) + ",";
+          } else {
+            csvFormattedData += String(currentRoundTimes[i]);
+          }
         }
+
+        if (writeToFile(fileName, csvFormattedData)) {
+          if (CHOICE_MODE) {
+            CHOICE_MODE = false;
+            start();
+          } else {
+            // if we're in non-choice mode then finished
+            end();
+          }
+        } else {
+          end();
+          LCDShowError(" SD WRITE ERROR ");
+        }
+
       } else {
         for (MenuItem& menuItem : menuItems) {
           if (menuItem.action != nullptr && menuItem.selected) {
@@ -432,6 +482,13 @@ void loop() {
   }
 }
 
+void LCDShowError(const String& error) {
+  lcd.clear();
+  lcd.print(error);
+
+  wdt_enable(WDTO_8S); // restart arduino in 8s
+}
+
 void LCDShowStartScreen() {
   lcd.clear();
 
@@ -508,7 +565,8 @@ void LCDShowSummary() {
   lcd.print(bestTime);
 
   lcd.setCursor(6, 1);
-  lcd.print(sum / MAX_ROUND);
+  averageRoundTime = sum / MAX_ROUND;
+  lcd.print(averageRoundTime);
 
   lcd.setCursor(12,1);
   lcd.print("OK");
@@ -590,6 +648,7 @@ void start() {
 
   delete[] currentRoundTimes;
   currentRoundTimes = new long[MAX_ROUND];
+  averageRoundTime = 0;
   currentRoundPresses = 0;
 
   COUNTDOWN_START = millis();
