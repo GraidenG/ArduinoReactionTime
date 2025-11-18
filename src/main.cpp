@@ -15,7 +15,7 @@ volatile bool BUTTON_STATES[5] = {false, false, false, false, false};
 
 volatile unsigned long BUTTON_PRESS_TIMES[5] = {0, 0, 0, 0 ,0};
 
-int LEDS[3] = {49, 51, 53};
+int LEDS[3] = {43, 45, 47};
 
 int VOID_BUTTON = BUTTONS[3];
 int START_BUTTON = BUTTONS[4];
@@ -29,7 +29,7 @@ long LED_TIMESTAMP = -1;
 bool RUNNING = false;
 bool PRACTICE = false;
 long COUNTDOWN_START = -1;
-int CS = 10; // SD card pin thing
+int CS = 53; // SD card pin thing
 
 int userID = 0;
 
@@ -39,9 +39,10 @@ int roundNumber = 0;
 
 bool startButtonHeld = false;
 bool voidButtonHeld = false;
+bool leftButtonHeld = false;
+bool rightButtonHeld = false;
 
-bool bothHeld = false;
-long heldBothStartTimestamp = 0;
+unsigned long lastIncorrectTime = 0;
 
 long cancelFlashEndTime = -1;
 
@@ -50,7 +51,6 @@ bool CHOICE_MODE = true;
 int MAX_ROUND = 3;
 
 long *currentRoundTimes; // round
-long averageRoundTime = 0;
 int currentRoundPresses = 0;
 
 const char* fileName = "data.csv";
@@ -71,7 +71,7 @@ LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
 
 void buttonHandler(int button);
 void detectButton(int button_index);
-void start();
+void startTest();
 void countdownHandling();
 void detectButton_1();
 void detectButton_2();
@@ -94,6 +94,7 @@ void LCDStartCountdown();
 void LCDStartTest();
 void LCDShowSummary();
 void LCDShowError(const String& error);
+void start();
 
 class MenuItem {
   public:
@@ -126,7 +127,7 @@ MenuItem menuItems[] = {
 
 bool onMenu = true;
 
-bool writeToFile(const char* path, String data) {
+bool writeToFile(const char* path, const String& data) {
   File file = SD.open(path, FILE_WRITE);
 
   if (!file) {
@@ -174,7 +175,6 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(START_BUTTON), []{buttonHandler(4);}, FALLING);
 
   lcd.begin(16, 2);
-  LCDShowStartScreen();
 
 
   pinMode(CS, OUTPUT);
@@ -182,7 +182,7 @@ void setup() {
    File file;
    if (!SD.begin(CS)) {
      Serial.print("Error init SD card!");
-     wdt_enable(WDTO_8S); // restart in 8s
+     LCDShowError("SD INIT ERROR");
      while(true); // wait for arduino restart
    }
 
@@ -190,20 +190,21 @@ void setup() {
 
    if (!file) {
      Serial.print("Error while creating/opening file");
-     wdt_enable(WDTO_8S); // restart in 8s
+     LCDShowError("SD CREATE ERROR");
      while(true); // wait for arduino restart
    }
 
   file.close();
 
   file = SD.open(fileName, FILE_READ);
+  const int bufferSize = 128;
+  char* charArray = new char[bufferSize];
+
 
   String line;
   while (file.available()) {
-    line = file.readStringUntil('\n');
-
-    char charArray[line.length() + 1];
-    line.toCharArray(charArray, line.length() + 1);
+    unsigned int bytesRead = file.readBytesUntil('\n', charArray, bufferSize - 1);
+    charArray[bytesRead] = '\0'; // null terminate, not sure if needed but can't hurt to not do strings wrong
 
     char* element = strtok(charArray, ",");
 
@@ -223,8 +224,11 @@ void setup() {
     }
   }
 
+  delete[] charArray;
+
   file.close();
 
+  LCDShowStartScreen();
 }
 
 void buttonHandler(int index) {
@@ -247,83 +251,18 @@ void buttonPressChecks() {
     voidButtonHeld = true;
   }
 
-  // todo: handle debounce here
   // Button 0 (leftmost) acting as a "left" button for the menu
-  if (getButtonState(BUTTONS[0]) && onMenu) {
+  if (getButtonState(BUTTONS[0]) && onMenu && !RUNNING) {
     setButtonState(BUTTONS[0], false);
+    leftButtonHeld = true;
     Serial.println("BUTTON 0 PRESSED");
-
-    int size = sizeof(menuItems) / sizeof(MenuItem); // array size
-
-    for (int i = 0; i < size; i++) {
-      MenuItem &menuItem = menuItems[i];
-      if (menuItem.selected) {
-        menuItem.selected = false;
-
-        // set cursor "highlight"
-        if (i - 1 >= 0) {
-          Serial.println("left");
-          MenuItem &newMenuItem = menuItems[i - 1];
-
-          Serial.print(" new selected name: ");
-          Serial.println(newMenuItem.name);
-
-          newMenuItem.selected = true;
-          lcd.setCursor(newMenuItem.position, newMenuItem.row);
-          break;
-        } else {
-          Serial.println("wrap from left");
-          MenuItem &newMenuItem = menuItems[size - 1];
-
-          Serial.print(" new selected name: ");
-          Serial.println(newMenuItem.name);
-          newMenuItem.selected = true;
-          lcd.setCursor(newMenuItem.position, newMenuItem.row);
-          break;
-        }
-      }
-    }
   }
 
   // Button 2 (rightmost) acting as a "right" button for the menu
-  if (getButtonState(BUTTONS[2]) && onMenu) {
+  if (getButtonState(BUTTONS[2]) && onMenu && !RUNNING) {
     Serial.println("BUTTON 2 PRESSED");
     setButtonState(BUTTONS[2], false);
-
-    int size = sizeof(menuItems) / sizeof(MenuItem); // array size
-    for (int i = 0; i < size; i++) {
-      MenuItem &menuItem = menuItems[i];
-      Serial.print("menu item: ");
-      Serial.print(menuItem.name);
-      Serial.print(" selected: ");
-      Serial.println(menuItem.selected);
-
-
-      if (menuItem.selected) {
-        menuItem.selected = false;
-
-        // set cursor highlight
-        if (i + 1 < size) {
-          Serial.println("right");
-          MenuItem &newMenuItem = menuItems[i + 1];
-
-          Serial.print(" new selected name: ");
-          Serial.println(newMenuItem.name);
-          newMenuItem.selected = true;
-          lcd.setCursor(newMenuItem.position, newMenuItem.row);
-
-          break;
-        } else {
-          Serial.println("wrap from right");
-          MenuItem &newMenuItem = menuItems[0];
-          Serial.print(" new selected name: ");
-          Serial.println(newMenuItem.name);
-          newMenuItem.selected = true;
-          lcd.setCursor(newMenuItem.position, newMenuItem.row);
-          break;
-        }
-      }
-    }
+    rightButtonHeld = true;
   }
 
 
@@ -360,23 +299,124 @@ void buttonHeldActions() {
     }
   }*/
 
+  // the logic in these checks is a bit confusing, but it boils down to checking if the press is fake (i.e. caused by something like debounce but idk what), then it will be back to HIGH shortly and can be ignored. Otherwise there's a 40ms timer to hold down a button for (imperceptible) to help with debounce
+
+  if (leftButtonHeld && !RUNNING && onMenu) {
+    Serial.println("LEFT BUTTON HELD");
+    if (getButtonLastPressed(BUTTONS[0]) + 20 < millis() && digitalRead(BUTTONS[0]) != LOW) {
+      leftButtonHeld = false; // no longer held down, debounce
+    } else if (millis() > getButtonLastPressed(BUTTONS[0]) + 40 && digitalRead(BUTTONS[0]) == LOW) {
+      leftButtonHeld = false; // reset
+
+      int size = sizeof(menuItems) / sizeof(MenuItem); // array size
+
+      for (int i = 0; i < size; i++) {
+        MenuItem &menuItem = menuItems[i];
+        if (menuItem.selected) {
+          menuItem.selected = false;
+
+          // set cursor "highlight"
+          if (i - 1 >= 0) {
+            Serial.println("left");
+            MenuItem &newMenuItem = menuItems[i - 1];
+
+            Serial.print(" new selected name: ");
+            Serial.println(newMenuItem.name);
+
+            newMenuItem.selected = true;
+            lcd.setCursor(newMenuItem.position, newMenuItem.row);
+            break;
+          } else {
+            Serial.println("wrap from left");
+            MenuItem &newMenuItem = menuItems[size - 1];
+
+            Serial.print(" new selected name: ");
+            Serial.println(newMenuItem.name);
+            newMenuItem.selected = true;
+            lcd.setCursor(newMenuItem.position, newMenuItem.row);
+            break;
+          }
+        }  else if (i + 1 == size) {
+          // fallback
+          menuItem.selected = true;
+          lcd.setCursor(menuItem.position, menuItem.row);
+        }
+      }
+    }
+  }
+
+
+  if (rightButtonHeld && !RUNNING && onMenu) {
+    if (getButtonLastPressed(BUTTONS[2]) + 20 < millis() && digitalRead(BUTTONS[2]) != LOW) {
+      rightButtonHeld = false; // no longer held down, debounce
+    } else if (millis() > getButtonLastPressed(BUTTONS[2]) + 40 && digitalRead(BUTTONS[2]) == LOW) {
+      rightButtonHeld = false; // reset
+
+      int size = sizeof(menuItems) / sizeof(MenuItem); // array size
+      for (int i = 0; i < size; i++) {
+        MenuItem &menuItem = menuItems[i];
+        Serial.print("menu item: ");
+        Serial.print(menuItem.name);
+        Serial.print(" selected: ");
+        Serial.println(menuItem.selected);
+
+
+        if (menuItem.selected) {
+          menuItem.selected = false;
+
+          // set cursor highlight
+          if (i + 1 < size) {
+            Serial.println("right");
+            MenuItem &newMenuItem = menuItems[i + 1];
+
+            Serial.print(" new selected name: ");
+            Serial.println(newMenuItem.name);
+            newMenuItem.selected = true;
+            lcd.setCursor(newMenuItem.position, newMenuItem.row);
+
+            break;
+          } else {
+            Serial.println("wrap from right");
+            MenuItem &newMenuItem = menuItems[0];
+            Serial.print(" new selected name: ");
+            Serial.println(newMenuItem.name);
+            newMenuItem.selected = true;
+            lcd.setCursor(newMenuItem.position, newMenuItem.row);
+            break;
+          }
+        } else if (i + 1 == size) {
+          // fallback
+          menuItem.selected = true;
+          lcd.setCursor(menuItem.position, menuItem.row);
+        }
+      }
+    }
+  }
+
   // acting as a confirmation button, not necessarily start
   if (startButtonHeld && onMenu) {
     if (getButtonLastPressed(START_BUTTON) + 20 <= millis() && digitalRead(START_BUTTON) != LOW ) {
       // no longer held (with 20 ms cooldown to protect from debounce)
       startButtonHeld = false;
-    } else if (millis() > getButtonLastPressed(START_BUTTON) + 20 && digitalRead(START_BUTTON) == LOW) {
+    } else if (millis() > getButtonLastPressed(START_BUTTON) + 40 && digitalRead(START_BUTTON) == LOW) {
       startButtonHeld = false; // reset
       Serial.println("START BUTTON HELD");
 
-      if (RUNNING) {
+      if (RUNNING && !PRACTICE) {
         // if we're on the menu and it is running, then it is the summary page
         // specifically in Choice Mode we want to start the new countdown to non-choice mode
 
         String csvFormattedData;
 
         csvFormattedData += String(userID) + ",";
-        csvFormattedData += String(averageRoundTime) + ",";
+        if (CHOICE_MODE) {
+          csvFormattedData += "CHOICE,"; // choice mode
+        } else {
+          csvFormattedData += "SIMPLE,"; // simple mode
+        }
+
+        float accuracy = static_cast<float>(MAX_ROUND) / currentRoundPresses;
+        csvFormattedData += String(accuracy) + ","; // accuracy
 
         for (int i = 0; i < MAX_ROUND; i++) {
           if (i < MAX_ROUND - 1) {
@@ -389,7 +429,7 @@ void buttonHeldActions() {
         if (writeToFile(fileName, csvFormattedData)) {
           if (CHOICE_MODE) {
             CHOICE_MODE = false;
-            start();
+            startTest();
           } else {
             // if we're in non-choice mode then finished
             end();
@@ -399,6 +439,14 @@ void buttonHeldActions() {
           LCDShowError(" SD WRITE ERROR ");
         }
 
+      } else if (RUNNING && PRACTICE) {
+        if (CHOICE_MODE) {
+          CHOICE_MODE = false;
+          startTest();
+        } else {
+          // if we're in non-choice mode then finished
+          end();
+        }
       } else {
         for (MenuItem& menuItem : menuItems) {
           if (menuItem.action != nullptr && menuItem.selected) {
@@ -485,6 +533,8 @@ void loop() {
 void LCDShowError(const String& error) {
   lcd.clear();
   lcd.print(error);
+  lcd.setCursor(0, 1);
+  lcd.print("   RESTARTING   ");
 
   wdt_enable(WDTO_8S); // restart arduino in 8s
 }
@@ -565,8 +615,7 @@ void LCDShowSummary() {
   lcd.print(bestTime);
 
   lcd.setCursor(6, 1);
-  averageRoundTime = sum / MAX_ROUND;
-  lcd.print(averageRoundTime);
+  lcd.print(sum / MAX_ROUND);
 
   lcd.setCursor(12,1);
   lcd.print("OK");
@@ -633,14 +682,27 @@ void newUser() {
 
 void practice() {
   PRACTICE = true;
-  start();
+  MAX_ROUND = 5;
+  startTest();
 }
 
 void start() {
+  PRACTICE = false;
+  MAX_ROUND = 10;
+  startTest();
+}
+
+void startTest() {
   RUNNING = true;
   randomSeed(millis());
   onMenu = false;
   lcd.noBlink();
+
+  // reset state
+  startButtonHeld = false;
+  voidButtonHeld = false;
+  rightButtonHeld = false;
+  voidButtonHeld = false;
 
   Serial.println("STARTING TEST");
   roundNumber = 0;
@@ -648,7 +710,6 @@ void start() {
 
   delete[] currentRoundTimes;
   currentRoundTimes = new long[MAX_ROUND];
-  averageRoundTime = 0;
   currentRoundPresses = 0;
 
   COUNTDOWN_START = millis();
@@ -766,10 +827,12 @@ void detectButton(int button_index) {
 
     roundNumber++; // used by LCDWriteTime so needs to be updated after
     // record data
-  } else if (ACTIVE_LED != LEDS[button_index] && CHOICE_MODE && timeDelta > 100) {
+  } else if (ACTIVE_LED != LEDS[button_index] && CHOICE_MODE && timeDelta > 100 && millis() - lastIncorrectTime > 20) {
     Serial.println("INCORRECT! Time: " );
     Serial.println(timeDelta);
     currentRoundPresses++;
+
+    lastIncorrectTime = millis();
     // wrong button
     // record incorrect + time
   } else if (timeDelta > 0 && timeDelta <= 100) {
@@ -823,7 +886,7 @@ void setLED(int led_index) {
 }
 
 void setLEDTimestamp() {
-  LED_TIMESTAMP = millis() + random(2000, 6000);
+  LED_TIMESTAMP = millis() + random(3000, 10000);
   Serial.print("LED Timestamp: ");
   Serial.println(LED_TIMESTAMP);
 }
