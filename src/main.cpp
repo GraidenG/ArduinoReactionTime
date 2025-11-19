@@ -621,6 +621,11 @@ void LCDShowSummary() {
   lcd.print("OK");
   lcd.setCursor(12,1);
   lcd.blink();
+
+  // clear visual indication that test is over
+  digitalWrite(LEDS[0], HIGH);
+  digitalWrite(LEDS[1], HIGH);
+  digitalWrite(LEDS[2], HIGH);
 }
 
 void LCDStartCountdown() {
@@ -714,6 +719,11 @@ void startTest() {
 
   COUNTDOWN_START = millis();
   LCDStartCountdown();
+
+  // reset LEDs
+  digitalWrite(LEDS[0], LOW);
+  digitalWrite(LEDS[1], LOW);
+  digitalWrite(LEDS[2], LOW);
 }
 
 void cancel()
@@ -734,6 +744,11 @@ void end() {
   RUNNING = false;
   onMenu = true;
 
+  // reset LEDs
+  digitalWrite(LEDS[0], LOW);
+  digitalWrite(LEDS[1], LOW);
+  digitalWrite(LEDS[2], LOW);
+
   LCDShowStartScreen();
 }
 
@@ -742,8 +757,7 @@ void cancelHandling()
   if (cancelFlashEndTime == -1) return;
 
  // 500 ms on -> 250 ms off -> 250 on -> off
-  if (millis() < cancelFlashEndTime - 450)
-  {
+  if (millis() < cancelFlashEndTime - 450) {
     // on for first 450 ms
     digitalWrite(LEDS[0], HIGH);
     digitalWrite(LEDS[1], HIGH);
